@@ -30,6 +30,24 @@
   <div class="rp-filters" style="margin-left: 20px; margin-right: 20px;">
     <div class="rp-filters-grid">
 
+
+         <!-- Searchable combo filter: Practice -->
+      <div class="rp-field" id="fld-practice">
+        <label id="rpPracticeLbl">Practice</label>
+        <div class="rp-combo" id="rpPracticeCombo">
+          <input type="hidden" id="rpPractice" data-label="rpPracticeLabel" data-placeholder="All Practices">
+          <button type="button" class="rp-combo-btn" id="rpPracticeBtn" aria-haspopup="listbox">
+            <span id="rpPracticeLabel">All Practices</span>
+          </button>
+          <svg class="rp-combo-caret" viewBox="0 0 24 24" fill="none" stroke="#4c6072" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <button type="button" class="rp-clear-one" data-target="rpPractice" title="Clear">&times;</button>
+          <div class="rp-combo-panel" id="rpPracticePanel">
+            <input type="text" class="rp-combo-search" id="rpPracticeSearch" placeholder="Search practices…" autocomplete="off">
+            <div class="rp-combo-list" id="rpPracticeList"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- Searchable combo filter: Doctor -->
       
       <div class="rp-field" id="fld-doctor">
@@ -123,6 +141,8 @@
           <button type="button" class="rp-clear-one" data-target="rpToDate" title="Clear">&times;</button>
         </div>
       </div>
+
+   
 
     </div>
 

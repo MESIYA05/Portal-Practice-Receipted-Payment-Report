@@ -120,9 +120,11 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
 
 (function(){
 
-  var APP_LINK_NAME    = "";                           // EDIT ME (usually leave blank)
-  var REPORT_LINK_NAME = "Add_Payment_Report";         // report to read from
-  var CLAIMS_REPORT_LINK_NAME = "Add_Claim_Report";    // report containing service dates
+  var APP_LINK_NAME            = "";                           // EDIT ME (usually leave blank)
+  var REPORT_LINK_NAME         = "Add_Payment_Report";         // report to read from
+  var CLAIMS_REPORT_LINK_NAME  = "Add_Claim_Report";           // report containing service dates
+  var PRACTICE_REPORT_LINK_NAME = "Add_Practice_Report";       // report containing practice names and mapping
+  var SUBFORM_REPORT_LINK_NAME = "Doctor_Hospital_Subform_Report"; // report containing Doctor & Hospital mapping
 
   var FIELD = {
     paymentId  : "Payment_ID",          // EDIT ME — flat field on the parent record
@@ -140,16 +142,34 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
     claimId : "Claim_ID"
   };
   var CLAIM_FIELD = {
-  claimId: "Claim_ID",        // flat field on the claim record (shows CLM-1282)
-  lines: "Claim_Lines",       // subform holding the claim lines
-  itemCode: "Item",           // field inside each claim line
-  dateOfService: "Date_of_Service"  // field inside each claim line
-};
+    claimId: "Claim_ID",        // flat field on the claim record (shows CLM-1282)
+    lines: "Claim_Lines",       // subform holding the claim lines
+    itemCode: "Item",           // field inside each claim line
+    dateOfService: "Date_of_Service"  // field inside each claim line
+  };
+  var PRACTICE_FIELD = {
+    name: "Practice_Name",
+    id: "Practice_ID",
+    mapping: "Doctor_Hospital_Mapping"
+  };
+  var SUBFORM_FIELD = {
+    doctor: "Doctor",
+    hospital: "Hospital",
+    practice: "Add_Practice"
+  };
 
-  var rawRecords  = [];     // parent records exactly as returned by the API (one per Add_Payment_Report row)
-  var rawClaimRecords = [];
-  var allRecords  = [];     // flattened: one row per Payment_Items line item, merged with its parent's fields
-  var viewRecords = [];     // currently filtered/displayed dataset
+  var rawRecords         = [];     // parent records exactly as returned by the API (one per Add_Payment_Report row)
+  var rawClaimRecords    = [];
+  var rawPracticeRecords = [];
+  var rawMappingRecords  = [];
+  var allRecords         = [];     // flattened: one row per Payment_Items line item, merged with its parent's fields
+  var viewRecords        = [];     // currently filtered/displayed dataset
+
+  var practiceMap        = {};     // practiceNameLower -> { name, id, pairs: [{doctor, hospital}], doctors: [], hospitals: [] }
+  var allPracticesList   = [];
+  var allMappingDoctors  = [];
+  var allMappingHospitals = [];
+  var allMappingPairs    = [];
 
 
   var __uidCounter = 0;
@@ -177,6 +197,7 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
   var selectedRows = {};
 
   var optionLists = {
+    practice: [],
     doctor:   [],
     hospital: [],
     payer:    [],
@@ -184,23 +205,29 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
   };
 
   var els = {
-    doctor:   document.getElementById("rpDoctor"),    // hidden input holding the selected value
-    hospital: document.getElementById("rpHospital"),  // hidden input holding the selected value
-    payer:    document.getElementById("rpPayer"),      // hidden input holding the selected value
-    method:   document.getElementById("rpMethod"),
-    fromDate: document.getElementById("rpFromDate"),
-    toDate:   document.getElementById("rpToDate"),
-    patient:  document.getElementById("rpPatient"),
-    selectAll: document.getElementById("rpSelectAll"),
-    tbody:    document.getElementById("rpTbody"),
-    count:    document.getElementById("rpCount"),
+    practice:      document.getElementById("rpPractice"),
+    practiceLabel: document.getElementById("rpPracticeLabel"),
+    doctor:        document.getElementById("rpDoctor"),    // hidden input holding the selected value
+    doctorLabel:   document.getElementById("rpDoctorLabel"),
+    hospital:      document.getElementById("rpHospital"),  // hidden input holding the selected value
+    hospitalLabel: document.getElementById("rpHospitalLabel"),
+    payer:         document.getElementById("rpPayer"),      // hidden input holding the selected value
+    payerLabel:    document.getElementById("rpPayerLabel"),
+    method:        document.getElementById("rpMethod"),
+    fromDate:      document.getElementById("rpFromDate"),
+    toDate:        document.getElementById("rpToDate"),
+    patient:       document.getElementById("rpPatient"),
+    patientLabel:  document.getElementById("rpPatientLabel"),
+    selectAll:     document.getElementById("rpSelectAll"),
+    tbody:         document.getElementById("rpTbody"),
+    count:         document.getElementById("rpCount"),
     filteredCount: document.getElementById("rpFilteredCount"),
-    gsPayments:   document.getElementById("rpGsPayments"),
-    gsDoctors:    document.getElementById("rpGsDoctors"),
-    gsHospitals:  document.getElementById("rpGsHospitals"),
-    gsPaid:       document.getElementById("rpGsPaid"),
-    gsAdjustment: document.getElementById("rpGsAdjustment"),
-    gsBalance:    document.getElementById("rpGsBalance")
+    gsPayments:    document.getElementById("rpGsPayments"),
+    gsDoctors:     document.getElementById("rpGsDoctors"),
+    gsHospitals:   document.getElementById("rpGsHospitals"),
+    gsPaid:        document.getElementById("rpGsPaid"),
+    gsAdjustment:  document.getElementById("rpGsAdjustment"),
+    gsBalance:     document.getElementById("rpGsBalance")
   };
 
   /* ---------------- helpers ---------------- */
@@ -394,9 +421,224 @@ function toDateKey(zohoDateStr){
     if(values.indexOf(current) !== -1) selectEl.value = current;
   }
 
+  function buildPracticeDoctorHospitalMappings(){
+    practiceMap = {};
+    allPracticesList = [];
+    allMappingDoctors = [];
+    allMappingHospitals = [];
+    allMappingPairs = [];
+
+    var doctorSet = {};
+    var hospitalSet = {};
+    var pairKeySet = {};
+
+    function addGlobalPair(doc, hosp){
+      if(!doc) return;
+      doctorSet[doc] = true;
+      if(hosp) hospitalSet[hosp] = true;
+      var pKey = doc.toLowerCase() + "|||" + (hosp || "").toLowerCase();
+      if(!pairKeySet[pKey]){
+        pairKeySet[pKey] = true;
+        allMappingPairs.push({ doctor: doc, hospital: hosp });
+      }
+    }
+
+    var practiceById = {};
+    var practiceByName = {};
+
+    // 1. Process Add_Practice_Report records
+    rawPracticeRecords.forEach(function(p){
+      var pId = String(p.ID || p.id || "").trim();
+      var pCustomId = safe(p[PRACTICE_FIELD.id] || p.Practice_ID).trim();
+      var pName = safe(p[PRACTICE_FIELD.name] || p.Practice_Name).trim();
+      if(!pName && pCustomId) pName = pCustomId;
+      if(!pName && pId) pName = "Practice " + pId;
+      if(!pName) return;
+
+      var normName = pName.toLowerCase();
+      var pObj = practiceMap[normName];
+      if(!pObj){
+        pObj = {
+          name: pName,
+          id: pId,
+          customId: pCustomId,
+          pairs: [],
+          doctors: [],
+          hospitals: [],
+          _pairSet: {}
+        };
+        practiceMap[normName] = pObj;
+      }
+      if(pId) practiceById[pId] = pObj;
+      if(pCustomId) practiceById[pCustomId] = pObj;
+      practiceByName[normName] = pObj;
+
+      // Check for embedded Doctor_Hospital_Mapping grid on practice record
+      var grid = p[PRACTICE_FIELD.mapping] || p.Doctor_Hospital_Mapping;
+      if(Array.isArray(grid) && grid.length){
+        grid.forEach(function(row){
+          var doc = safe(row[SUBFORM_FIELD.doctor] || row.Doctor).trim();
+          var hosp = safe(row[SUBFORM_FIELD.hospital] || row.Hospital).trim();
+          if(!doc) return;
+          var key = doc.toLowerCase() + "|||" + hosp.toLowerCase();
+          if(!pObj._pairSet[key]){
+            pObj._pairSet[key] = true;
+            pObj.pairs.push({ doctor: doc, hospital: hosp });
+          }
+          addGlobalPair(doc, hosp);
+        });
+      }
+    });
+
+    // 2. Process Doctor_Hospital_Subform_Report records
+    rawMappingRecords.forEach(function(m){
+      var doc = safe(m[SUBFORM_FIELD.doctor] || m.Doctor).trim();
+      var hosp = safe(m[SUBFORM_FIELD.hospital] || m.Hospital).trim();
+      if(!doc) return;
+      addGlobalPair(doc, hosp);
+
+      var pRef = m[SUBFORM_FIELD.practice] || m.Add_Practice;
+      var refId = "";
+      var refVal = "";
+      if(pRef && typeof pRef === "object"){
+        refId = String(pRef.ID || pRef.id || "").trim();
+        refVal = safe(pRef).trim();
+      } else if(pRef !== undefined && pRef !== null){
+        refId = String(pRef).trim();
+        refVal = refId;
+      }
+
+      var pObj = null;
+      if(refId && practiceById[refId]) pObj = practiceById[refId];
+      else if(refVal && practiceByName[refVal.toLowerCase()]) pObj = practiceByName[refVal.toLowerCase()];
+      else if(refVal && practiceById[refVal]) pObj = practiceById[refVal];
+      else if(refVal){
+        var normName = refVal.toLowerCase();
+        if(!practiceMap[normName]){
+          practiceMap[normName] = {
+            name: refVal,
+            id: refId,
+            customId: "",
+            pairs: [],
+            doctors: [],
+            hospitals: [],
+            _pairSet: {}
+          };
+        }
+        pObj = practiceMap[normName];
+        if(refId) practiceById[refId] = pObj;
+        practiceByName[normName] = pObj;
+      }
+
+      if(pObj){
+        var key = doc.toLowerCase() + "|||" + hosp.toLowerCase();
+        if(!pObj._pairSet[key]){
+          pObj._pairSet[key] = true;
+          pObj.pairs.push({ doctor: doc, hospital: hosp });
+        }
+      }
+    });
+
+    // Finalize unique doctor and hospital lists for each practice
+    Object.keys(practiceMap).forEach(function(k){
+      var pObj = practiceMap[k];
+      pObj.doctors = uniqueSorted(pObj.pairs.map(function(pr){ return pr.doctor; }));
+      pObj.hospitals = uniqueSorted(pObj.pairs.map(function(pr){ return pr.hospital; }));
+    });
+
+    allPracticesList = uniqueSorted(Object.keys(practiceMap).map(function(k){
+      return practiceMap[k].name;
+    }));
+
+    allMappingDoctors = uniqueSorted(Object.keys(doctorSet));
+    allMappingHospitals = uniqueSorted(Object.keys(hospitalSet));
+  }
+
+  function getPracticeByName(name){
+    if(!name) return null;
+    return practiceMap[name.trim().toLowerCase()] || null;
+  }
+
+  function getDoctorsForPractice(practiceName){
+    if(!practiceName){
+      if(allMappingDoctors.length) return allMappingDoctors.slice();
+      return uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.doctor]); }));
+    }
+    var pObj = getPracticeByName(practiceName);
+    if(pObj && pObj.doctors.length) return pObj.doctors.slice();
+    return [];
+  }
+
+  function getHospitalsForPracticeAndDoctor(practiceName, doctorName){
+    var pairs = [];
+    if(practiceName){
+      var pObj = getPracticeByName(practiceName);
+      pairs = pObj ? pObj.pairs : [];
+    } else {
+      pairs = allMappingPairs.length ? allMappingPairs : [];
+    }
+
+    if(doctorName){
+      var docNorm = doctorName.trim().toLowerCase();
+      var filtered = pairs.filter(function(pr){
+        return pr.doctor && pr.doctor.trim().toLowerCase() === docNorm;
+      });
+      var hospList = uniqueSorted(filtered.map(function(pr){ return pr.hospital; }));
+      if(hospList.length) return hospList;
+    }
+
+    if(pairs.length){
+      var hospList = uniqueSorted(pairs.map(function(pr){ return pr.hospital; }));
+      if(hospList.length) return hospList;
+    }
+
+    if(!practiceName && !doctorName){
+      if(allMappingHospitals.length) return allMappingHospitals.slice();
+      return uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.hospital]); }));
+    }
+    return [];
+  }
+
+  function onPracticeChange(newPracticeName){
+    var prevDoctor = els.doctor ? els.doctor.value : "";
+    var prevHospital = els.hospital ? els.hospital.value : "";
+
+    optionLists.doctor = getDoctorsForPractice(newPracticeName);
+
+    if(prevDoctor && optionLists.doctor.indexOf(prevDoctor) === -1){
+      if(els.doctor) els.doctor.value = "";
+      if(els.doctorLabel) els.doctorLabel.textContent = "All Doctors";
+    }
+
+    var curDoctor = els.doctor ? els.doctor.value : "";
+    optionLists.hospital = getHospitalsForPracticeAndDoctor(newPracticeName, curDoctor);
+
+    if(prevHospital && optionLists.hospital.indexOf(prevHospital) === -1){
+      if(els.hospital) els.hospital.value = "";
+      if(els.hospitalLabel) els.hospitalLabel.textContent = "All Hospitals";
+    }
+
+    refreshClearButtons();
+  }
+
+  function onDoctorChange(newDoctorName){
+    var curPractice = els.practice ? els.practice.value : "";
+    var prevHospital = els.hospital ? els.hospital.value : "";
+
+    optionLists.hospital = getHospitalsForPracticeAndDoctor(curPractice, newDoctorName);
+
+    if(prevHospital && optionLists.hospital.indexOf(prevHospital) === -1){
+      if(els.hospital) els.hospital.value = "";
+      if(els.hospitalLabel) els.hospitalLabel.textContent = "All Hospitals";
+    }
+
+    refreshClearButtons();
+  }
+
   function populateFilterOptions(){
-    optionLists.doctor   = uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.doctor]); }));
-    optionLists.hospital = uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.hospital]); }));
+    optionLists.practice = allPracticesList.length ? allPracticesList.slice() : [];
+    optionLists.doctor   = getDoctorsForPractice(els.practice ? els.practice.value : "");
+    optionLists.hospital = getHospitalsForPracticeAndDoctor(els.practice ? els.practice.value : "", els.doctor ? els.doctor.value : "");
     optionLists.payer    = uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.payerName]); }));
     optionLists.patient  = uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.patient]); }));
 
@@ -417,6 +659,8 @@ function toDateKey(zohoDateStr){
   document.querySelectorAll(".rp-clear-one").forEach(function(btn){
     btn.addEventListener("click", function(){
       var el = document.getElementById(btn.getAttribute("data-target"));
+      if(!el) return;
+      var oldVal = el.value;
       el.value = "";
       // If this is a combo's hidden value field, also reset its visible label.
       if(el.dataset && el.dataset.label){
@@ -425,6 +669,8 @@ function toDateKey(zohoDateStr){
       }
       closeAllCombos();
       refreshClearButtons();
+      var comboObj = allCombos.find(function(c){ return c.hiddenId === el.id; });
+      if(comboObj && comboObj.onChange && oldVal !== "") comboObj.onChange("");
     });
   });
 
@@ -448,6 +694,7 @@ function toDateKey(zohoDateStr){
     var list    = document.getElementById(opts.listId);
     var listKey = opts.listKey;
     var placeholder = opts.placeholder;
+    var onChange = opts.onChange;
     var activeIndex = -1;
 
     function filteredOptions(){
@@ -487,10 +734,12 @@ function toDateKey(zohoDateStr){
     }
 
     function selectValue(v){
+      var oldVal = hidden.value;
       hidden.value = v;
       label.textContent = v ? v : placeholder;
       close();
       refreshClearButtons();
+      if(onChange && oldVal !== v) onChange(v);
     }
 
     btn.addEventListener("click", function(e){
@@ -538,6 +787,8 @@ function toDateKey(zohoDateStr){
     });
 
     var api = {
+      hiddenId: opts.hiddenId,
+      onChange: onChange,
       close: close,
       reset: function(){
         hidden.value = "";
@@ -554,8 +805,14 @@ function toDateKey(zohoDateStr){
   }
 
   setupCombo({
+    comboId:"rpPracticeCombo", btnId:"rpPracticeBtn", labelId:"rpPracticeLabel", hiddenId:"rpPractice",
+    searchId:"rpPracticeSearch", listId:"rpPracticeList", listKey:"practice", placeholder:"All Practices",
+    onChange: function(v){ onPracticeChange(v); }
+  });
+  setupCombo({
     comboId:"rpDoctorCombo", btnId:"rpDoctorBtn", labelId:"rpDoctorLabel", hiddenId:"rpDoctor",
-    searchId:"rpDoctorSearch", listId:"rpDoctorList", listKey:"doctor", placeholder:"All Doctors"
+    searchId:"rpDoctorSearch", listId:"rpDoctorList", listKey:"doctor", placeholder:"All Doctors",
+    onChange: function(v){ onDoctorChange(v); }
   });
   setupCombo({
     comboId:"rpHospitalCombo", btnId:"rpHospitalBtn", labelId:"rpHospitalLabel", hiddenId:"rpHospital",
@@ -573,6 +830,7 @@ function toDateKey(zohoDateStr){
   /* ---------------- filtering ---------------- */
 
   function applyFilters(){
+    var fPractice = els.practice ? els.practice.value : "";
     var fDoctor   = els.doctor.value;     // exact value chosen from the combo list
     var fHospital = els.hospital.value;   // exact value chosen from the combo list
     var fPayer    = els.payer.value;      // exact value chosen from the combo list
@@ -581,9 +839,30 @@ function toDateKey(zohoDateStr){
     var fToDate   = els.toDate.value;     // yyyy-mm-dd
     var fPatient  = els.patient.value;    // exact value chosen from the combo list
 
+    var practiceObj = fPractice ? getPracticeByName(fPractice) : null;
+    var practicePairs = practiceObj ? practiceObj.pairs : null;
+
     viewRecords = allRecords.filter(function(r){
-      if(fDoctor   && safe(r[FIELD.doctor])    !== fDoctor)   return false;
-      if(fHospital && safe(r[FIELD.hospital])  !== fHospital) return false;
+      var rDoctor = safe(r[FIELD.doctor]).trim();
+      var rHospital = safe(r[FIELD.hospital]).trim();
+
+      // If a Practice is selected, record's Doctor & Hospital must match one of the practice's mapped pairs
+      if(practicePairs){
+        var docNorm = rDoctor.toLowerCase();
+        var hospNorm = rHospital.toLowerCase();
+        var matchesPracticePair = practicePairs.some(function(pair){
+          var pDocNorm = (pair.doctor || "").trim().toLowerCase();
+          var pHospNorm = (pair.hospital || "").trim().toLowerCase();
+          if(!pDocNorm) return false;
+          if(pDocNorm !== docNorm) return false;
+          if(pHospNorm && pHospNorm !== hospNorm) return false;
+          return true;
+        });
+        if(!matchesPracticePair) return false;
+      }
+
+      if(fDoctor   && rDoctor !== fDoctor)     return false;
+      if(fHospital && rHospital !== fHospital) return false;
       if(fPayer    && safe(r[FIELD.payerName]) !== fPayer)    return false;
       if(fMethod   && safe(r[FIELD.method])    !== fMethod)   return false;
 
@@ -604,6 +883,7 @@ function toDateKey(zohoDateStr){
     els.method.value = "";
     els.fromDate.value = "";
     els.toDate.value = "";
+    onPracticeChange("");
     refreshClearButtons();
     viewRecords = allRecords.slice();
     renderTable();
@@ -834,8 +1114,9 @@ document.getElementById("rpExportExcel").addEventListener("click", function(){
     return "All";
   }
 
-  function doctorLabel(){ return getFilterValueByLabel("DOCTOR") || "All"; }
-  function hospitalLabel(){ return getFilterValueByLabel("HOSPITAL") || "All"; }
+  function practiceLabel(){ return (els.practice && els.practice.value) ? els.practice.value : "All Practices"; }
+  function doctorLabel(){ return (els.doctor && els.doctor.value) ? els.doctor.value : (getFilterValueByLabel("DOCTOR") || "All Doctors"); }
+  function hospitalLabel(){ return (els.hospital && els.hospital.value) ? els.hospital.value : (getFilterValueByLabel("HOSPITAL") || "All Hospitals"); }
   function paymentMethodLabel(){ return getFilterValueByLabel("PAYMENT METHOD") || "All methods"; }
   function dateRangeLabel(){
     var from = els.fromDate && els.fromDate.value ? els.fromDate.value : "";
@@ -856,6 +1137,7 @@ document.getElementById("rpExportExcel").addEventListener("click", function(){
   var headerOpts = {
     reportTitle: "Payment Report",
     fields: [
+      { label: "Practice",     value: practiceLabel() },
       { label: "Doctor",       value: doctorLabel() },
       { label: "Payment Type", value: paymentMethodLabel() },
       { label: "Payment Date", value: dateRangeLabel() },
@@ -1409,6 +1691,7 @@ function iconPhone(doc, x, y, s, color) {
   var headerOpts = {
     reportTitle: "RECEIPTED PAYMENTS",
     fields: [
+      { label: "Practice", value: practiceLabel(), icon: iconHospital },
       { label: "Doctor", value: doctorLabel(), icon: iconPerson },
       { label: "Hospital", value: hospitalLabel(), icon: iconHospital },
       { label: "Payment Date", value: dateRangeLabel(), icon: iconCalendar },
@@ -1535,19 +1818,42 @@ function iconPhone(doc, x, y, s, color) {
     return fetchReportPage(CLAIMS_REPORT_LINK_NAME, cursor, rawClaimRecords);
   }
 
+  function fetchAllPracticeRecordsPage(cursor){
+    return fetchReportPage(PRACTICE_REPORT_LINK_NAME, cursor, rawPracticeRecords);
+  }
+
+  function fetchAllMappingRecordsPage(cursor){
+    return fetchReportPage(SUBFORM_REPORT_LINK_NAME, cursor, rawMappingRecords);
+  }
+
   var DEBUG_LOG_RAW_RECORD = true;
 
   function loadRecords(){
     rawRecords = [];
     rawClaimRecords = [];
+    rawPracticeRecords = [];
+    rawMappingRecords = [];
+
     Promise.all([
       fetchAllRecordsPage(null),
-      fetchAllClaimRecordsPage(null)
+      fetchAllClaimRecordsPage(null),
+      fetchAllPracticeRecordsPage(null).catch(function(err){
+        console.warn("Practice report fetch failed:", err);
+      }),
+      fetchAllMappingRecordsPage(null).catch(function(err){
+        console.warn("Doctor hospital subform report fetch failed:", err);
+      })
     ]).then(function(){
       allRecords = flattenRecords(rawRecords);
       attachClaimServiceDates(allRecords, rawClaimRecords);
+      buildPracticeDoctorHospitalMappings();
+      populateFilterOptions();
       viewRecords = allRecords.slice();
       els.count.textContent = allRecords.length + " payment line items loaded";
+
+      console.log("Practices loaded:", rawPracticeRecords.length,
+                  "| Doctor-Hospital mapping records loaded:", rawMappingRecords.length,
+                  "| Mapped practices:", Object.keys(practiceMap).length);
 
       if(DEBUG_LOG_RAW_RECORD && rawRecords.length){
         console.log("===== RAW FIRST PARENT RECORD (copy everything below) =====");
@@ -1572,7 +1878,6 @@ function iconPhone(doc, x, y, s, color) {
         console.log("===== END DIAGNOSTIC — paste the three blocks above =====");
       }
 
-      populateFilterOptions();
       renderTable();
     }).catch(function(err){
       console.error("Payment or claims report fetch failed:", err);
