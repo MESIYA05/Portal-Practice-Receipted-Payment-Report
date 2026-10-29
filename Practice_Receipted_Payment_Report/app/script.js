@@ -232,6 +232,10 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
 
   /* ---------------- helpers ---------------- */
 
+  function cleanName(s){
+    return String(s || "").replace(/\u00A0/g, " ").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
   function safe(v){
     if(v === undefined || v === null) return "";
     if(Array.isArray(v)){
@@ -619,6 +623,7 @@ function toDateKey(zohoDateStr){
     }
 
     refreshClearButtons();
+    applyFilters();
   }
 
   function onDoctorChange(newDoctorName){
@@ -633,6 +638,12 @@ function toDateKey(zohoDateStr){
     }
 
     refreshClearButtons();
+    applyFilters();
+  }
+
+  function onHospitalChange(newHospitalName){
+    refreshClearButtons();
+    applyFilters();
   }
 
   function populateFilterOptions(){
@@ -670,13 +681,17 @@ function toDateKey(zohoDateStr){
       closeAllCombos();
       refreshClearButtons();
       var comboObj = allCombos.find(function(c){ return c.hiddenId === el.id; });
-      if(comboObj && comboObj.onChange && oldVal !== "") comboObj.onChange("");
+      if(comboObj && comboObj.onChange){
+        comboObj.onChange("");
+      } else {
+        applyFilters();
+      }
     });
   });
 
   [els.method, els.fromDate, els.toDate].forEach(function(el){
-    el.addEventListener("change", refreshClearButtons);
-    el.addEventListener("input", refreshClearButtons);
+    el.addEventListener("change", function(){ refreshClearButtons(); applyFilters(); });
+    el.addEventListener("input", function(){ refreshClearButtons(); applyFilters(); });
   });
 
   /* ---------------- searchable combo filter (Doctor / Hospital / Payer Name) ----------------
@@ -739,7 +754,7 @@ function toDateKey(zohoDateStr){
       label.textContent = v ? v : placeholder;
       close();
       refreshClearButtons();
-      if(onChange && oldVal !== v) onChange(v);
+      if(onChange) onChange(v);
     }
 
     btn.addEventListener("click", function(e){
@@ -816,15 +831,18 @@ function toDateKey(zohoDateStr){
   });
   setupCombo({
     comboId:"rpHospitalCombo", btnId:"rpHospitalBtn", labelId:"rpHospitalLabel", hiddenId:"rpHospital",
-    searchId:"rpHospitalSearch", listId:"rpHospitalList", listKey:"hospital", placeholder:"All Hospitals"
+    searchId:"rpHospitalSearch", listId:"rpHospitalList", listKey:"hospital", placeholder:"All Hospitals",
+    onChange: function(v){ onHospitalChange(v); }
   });
   setupCombo({
     comboId:"rpPayerCombo", btnId:"rpPayerBtn", labelId:"rpPayerLabel", hiddenId:"rpPayer",
-    searchId:"rpPayerSearch", listId:"rpPayerList", listKey:"payer", placeholder:"All Payers"
+    searchId:"rpPayerSearch", listId:"rpPayerList", listKey:"payer", placeholder:"All Payers",
+    onChange: function(v){ applyFilters(); }
   });
   setupCombo({
     comboId:"rpPatientCombo", btnId:"rpPatientBtn", labelId:"rpPatientLabel", hiddenId:"rpPatient",
-    searchId:"rpPatientSearch", listId:"rpPatientList", listKey:"patient", placeholder:"All Patients"
+    searchId:"rpPatientSearch", listId:"rpPatientList", listKey:"patient", placeholder:"All Patients",
+    onChange: function(v){ applyFilters(); }
   });
 
   /* ---------------- filtering ---------------- */
@@ -840,37 +858,42 @@ function toDateKey(zohoDateStr){
     var fPatient  = els.patient.value;    // exact value chosen from the combo list
 
     var practiceObj = fPractice ? getPracticeByName(fPractice) : null;
-    var practicePairs = practiceObj ? practiceObj.pairs : null;
+    var activePairs = (practiceObj && practiceObj.pairs && practiceObj.pairs.length)
+      ? practiceObj.pairs
+      : (fPractice ? [] : allMappingPairs);
 
     viewRecords = allRecords.filter(function(r){
       var rDoctor = safe(r[FIELD.doctor]).trim();
       var rHospital = safe(r[FIELD.hospital]).trim();
 
-      // If a Practice is selected, record's Doctor & Hospital must match one of the practice's mapped pairs
-      if(practicePairs){
-        var docNorm = rDoctor.toLowerCase();
-        var hospNorm = rHospital.toLowerCase();
-        var matchesPracticePair = practicePairs.some(function(pair){
-          var pDocNorm = (pair.doctor || "").trim().toLowerCase();
-          var pHospNorm = (pair.hospital || "").trim().toLowerCase();
+      // Only data where Doctor matches with Hospital from Doctor_Hospital_Subform_Report will show in table records
+      if(activePairs && activePairs.length){
+        var docNorm = cleanName(rDoctor);
+        var hospNorm = cleanName(rHospital);
+        var matchesPair = activePairs.some(function(pair){
+          var pDocNorm = cleanName(pair.doctor);
+          var pHospNorm = cleanName(pair.hospital);
           if(!pDocNorm) return false;
           if(pDocNorm !== docNorm) return false;
           if(pHospNorm && pHospNorm !== hospNorm) return false;
           return true;
         });
-        if(!matchesPracticePair) return false;
+        if(!matchesPair) return false;
+      } else {
+        // No matching doctor & hospital mappings exist
+        return false;
       }
 
-      if(fDoctor   && rDoctor !== fDoctor)     return false;
-      if(fHospital && rHospital !== fHospital) return false;
-      if(fPayer    && safe(r[FIELD.payerName]) !== fPayer)    return false;
-      if(fMethod   && safe(r[FIELD.method])    !== fMethod)   return false;
+      if(fDoctor   && cleanName(rDoctor)   !== cleanName(fDoctor))   return false;
+      if(fHospital && cleanName(rHospital) !== cleanName(fHospital)) return false;
+      if(fPayer    && safe(r[FIELD.payerName]) !== fPayer)           return false;
+      if(fMethod   && safe(r[FIELD.method])    !== fMethod)          return false;
 
       var paymentDateKey = toDateKey(r[FIELD.paymentDate]);
       if(fFromDate && (!paymentDateKey || paymentDateKey < fFromDate)) return false;
       if(fToDate   && (!paymentDateKey || paymentDateKey > fToDate)) return false;
 
-      if(fPatient  && safe(r[FIELD.patient])   !== fPatient)  return false;
+      if(fPatient  && safe(r[FIELD.patient])   !== fPatient)         return false;
       return true;
     });
 
@@ -885,8 +908,7 @@ function toDateKey(zohoDateStr){
     els.toDate.value = "";
     onPracticeChange("");
     refreshClearButtons();
-    viewRecords = allRecords.slice();
-    renderTable();
+    applyFilters();
   }
 
   document.getElementById("rpApply").addEventListener("click", applyFilters);
@@ -1848,7 +1870,6 @@ function iconPhone(doc, x, y, s, color) {
       attachClaimServiceDates(allRecords, rawClaimRecords);
       buildPracticeDoctorHospitalMappings();
       populateFilterOptions();
-      viewRecords = allRecords.slice();
       els.count.textContent = allRecords.length + " payment line items loaded";
 
       console.log("Practices loaded:", rawPracticeRecords.length,
@@ -1878,7 +1899,7 @@ function iconPhone(doc, x, y, s, color) {
         console.log("===== END DIAGNOSTIC — paste the three blocks above =====");
       }
 
-      renderTable();
+      applyFilters();
     }).catch(function(err){
       console.error("Payment or claims report fetch failed:", err);
       var msg = (err && err.message) ? err.message : "Check both report names and field link names in the script.";
