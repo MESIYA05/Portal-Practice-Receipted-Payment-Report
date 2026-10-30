@@ -121,9 +121,9 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
 (function(){
 
   var APP_LINK_NAME            = "";                           // EDIT ME (usually leave blank)
-  var REPORT_LINK_NAME         = "Add_Payment_Report";         // report to read from
-  var CLAIMS_REPORT_LINK_NAME  = "Add_Claim_Report";           // report containing service dates
-  var PRACTICE_REPORT_LINK_NAME = "Add_Practice_Report";       // report containing practice names and mapping
+  var REPORT_LINK_NAME         = "Practice_Payments";         // report to read from
+  var CLAIMS_REPORT_LINK_NAME  = "Practice_Claims";           // report containing service dates
+  var PRACTICE_REPORT_LINK_NAME = "My_Practice";       // report containing practice names and mapping
   var SUBFORM_REPORT_LINK_NAME = "Doctor_Hospital_Subform_Report"; // report containing Doctor & Hospital mapping
 
   var FIELD = {
