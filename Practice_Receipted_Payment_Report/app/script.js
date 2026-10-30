@@ -150,8 +150,10 @@ end`};e.events.push(["putFont",function(a){(function(o){var s=o.font,A=o.out,u=o
   var PRACTICE_FIELD = {
     name: "Practice_Name",
     id: "Practice_ID",
+    email: "Contact_Email",
     mapping: "Doctor_Hospital_Mapping"
   };
+  var loggedInEmail = "";
   var SUBFORM_FIELD = {
     doctor: "Doctor",
     hospital: "Hospital",
@@ -450,11 +452,25 @@ function toDateKey(zohoDateStr){
     var practiceById = {};
     var practiceByName = {};
 
-    // 1. Process Add_Practice_Report records
-    rawPracticeRecords.forEach(function(p){
+    // Filter practice records by Contact_Email if loggedInEmail is available
+    var validPracticeRecords = rawPracticeRecords;
+    if(loggedInEmail){
+      var matchingByEmail = rawPracticeRecords.filter(function(p){
+        var pEmail = cleanName(safe(p[PRACTICE_FIELD.email] || p.Contact_Email));
+        return pEmail && pEmail === cleanName(loggedInEmail);
+      });
+      // If matches found with logged in email, restrict to them
+      if(matchingByEmail.length){
+        validPracticeRecords = matchingByEmail;
+      }
+    }
+
+    // 1. Process My_Practice records
+    validPracticeRecords.forEach(function(p){
       var pId = String(p.ID || p.id || "").trim();
       var pCustomId = safe(p[PRACTICE_FIELD.id] || p.Practice_ID).trim();
       var pName = safe(p[PRACTICE_FIELD.name] || p.Practice_Name).trim();
+      var pEmail = safe(p[PRACTICE_FIELD.email] || p.Contact_Email).trim();
       if(!pName && pCustomId) pName = pCustomId;
       if(!pName && pId) pName = "Practice " + pId;
       if(!pName) return;
@@ -466,6 +482,7 @@ function toDateKey(zohoDateStr){
           name: pName,
           id: pId,
           customId: pCustomId,
+          email: pEmail,
           pairs: [],
           doctors: [],
           hospitals: [],
@@ -499,7 +516,6 @@ function toDateKey(zohoDateStr){
       var doc = safe(m[SUBFORM_FIELD.doctor] || m.Doctor).trim();
       var hosp = safe(m[SUBFORM_FIELD.hospital] || m.Hospital).trim();
       if(!doc) return;
-      addGlobalPair(doc, hosp);
 
       var pRef = m[SUBFORM_FIELD.practice] || m.Add_Practice;
       var refId = "";
@@ -516,7 +532,7 @@ function toDateKey(zohoDateStr){
       if(refId && practiceById[refId]) pObj = practiceById[refId];
       else if(refVal && practiceByName[refVal.toLowerCase()]) pObj = practiceByName[refVal.toLowerCase()];
       else if(refVal && practiceById[refVal]) pObj = practiceById[refVal];
-      else if(refVal){
+      else if(refVal && !validPracticeRecords.length){
         var normName = refVal.toLowerCase();
         if(!practiceMap[normName]){
           practiceMap[normName] = {
@@ -540,6 +556,7 @@ function toDateKey(zohoDateStr){
           pObj._pairSet[key] = true;
           pObj.pairs.push({ doctor: doc, hospital: hosp });
         }
+        addGlobalPair(doc, hosp);
       }
     });
 
@@ -648,6 +665,29 @@ function toDateKey(zohoDateStr){
 
   function populateFilterOptions(){
     optionLists.practice = allPracticesList.length ? allPracticesList.slice() : [];
+
+    // Auto-select practice if user belongs to a practice
+    if(allPracticesList.length === 1){
+      var singlePractice = allPracticesList[0];
+      if(els.practice) els.practice.value = singlePractice;
+      if(els.practiceLabel) els.practiceLabel.textContent = singlePractice;
+
+      // Disable practice dropdown
+      var practiceCombo = document.getElementById("rpPracticeCombo");
+      if(practiceCombo){
+        practiceCombo.classList.add("rp-disabled");
+      }
+      var practiceBtn = document.getElementById("rpPracticeBtn");
+      if(practiceBtn){
+        practiceBtn.disabled = true;
+      }
+    } else if(allPracticesList.length > 1 && !els.practice.value){
+      // If current value is not one of allowed practices, pick the first
+      var singlePractice = allPracticesList[0];
+      if(els.practice) els.practice.value = singlePractice;
+      if(els.practiceLabel) els.practiceLabel.textContent = singlePractice;
+    }
+
     optionLists.doctor   = getDoctorsForPractice(els.practice ? els.practice.value : "");
     optionLists.hospital = getHospitalsForPracticeAndDoctor(els.practice ? els.practice.value : "", els.doctor ? els.doctor.value : "");
     optionLists.payer    = uniqueSorted(allRecords.map(function(r){ return safe(r[FIELD.payerName]); }));
@@ -857,16 +897,23 @@ function toDateKey(zohoDateStr){
     var fToDate   = els.toDate.value;     // yyyy-mm-dd
     var fPatient  = els.patient.value;    // exact value chosen from the combo list
 
+    // If no practice is manually chosen but user has mapped practices, enforce them
+    if(!fPractice && allPracticesList.length){
+      fPractice = allPracticesList[0];
+      if(els.practice) els.practice.value = fPractice;
+      if(els.practiceLabel) els.practiceLabel.textContent = fPractice;
+    }
+
     var practiceObj = fPractice ? getPracticeByName(fPractice) : null;
     var activePairs = (practiceObj && practiceObj.pairs && practiceObj.pairs.length)
       ? practiceObj.pairs
-      : (fPractice ? [] : allMappingPairs);
+      : (fPractice ? [] : (allPracticesList.length ? [] : allMappingPairs));
 
     viewRecords = allRecords.filter(function(r){
       var rDoctor = safe(r[FIELD.doctor]).trim();
       var rHospital = safe(r[FIELD.hospital]).trim();
 
-      // Only data where Doctor matches with Hospital from Doctor_Hospital_Subform_Report will show in table records
+      // Only data where Doctor matches with Hospital for the user's practice will show in table records
       if(activePairs && activePairs.length){
         var docNorm = cleanName(rDoctor);
         var hospNorm = cleanName(rHospital);
@@ -880,7 +927,7 @@ function toDateKey(zohoDateStr){
         });
         if(!matchesPair) return false;
       } else {
-        // No matching doctor & hospital mappings exist
+        // No matching doctor & hospital mappings exist for this practice
         return false;
       }
 
@@ -902,11 +949,21 @@ function toDateKey(zohoDateStr){
   }
 
   function resetAll(){
-    allCombos.forEach(function(c){ c.reset(); });
+    allCombos.forEach(function(c){
+      if(c.hiddenId === "rpPractice" && allPracticesList.length === 1){
+        return; // Keep single assigned practice
+      }
+      c.reset();
+    });
     els.method.value = "";
     els.fromDate.value = "";
     els.toDate.value = "";
-    onPracticeChange("");
+    var curPractice = (allPracticesList.length === 1) ? allPracticesList[0] : "";
+    if(curPractice){
+      if(els.practice) els.practice.value = curPractice;
+      if(els.practiceLabel) els.practiceLabel.textContent = curPractice;
+    }
+    onPracticeChange(curPractice);
     refreshClearButtons();
     applyFilters();
   }
@@ -1808,7 +1865,22 @@ function iconPhone(doc, x, y, s, color) {
     drawFooter(doc, p, pageCount, footerOpts);
   }
 
-  doc.save("Receipted_Payments.pdf");
+  try {
+    var pdfBlob = doc.output("blob");
+    var blobUrl = URL.createObjectURL(pdfBlob);
+    var downloadLink = document.createElement("a");
+    downloadLink.href = blobUrl;
+    downloadLink.download = "Receipted_Payments.pdf";
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    setTimeout(function(){
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(blobUrl);
+    }, 250);
+  } catch(pdfErr) {
+    console.warn("Direct blob download fallback to doc.save:", pdfErr);
+    doc.save("Receipted_Payments.pdf");
+  }
 });
 
   function fetchReportPage(reportName, cursor, targetRecords){
@@ -1907,6 +1979,28 @@ function iconPhone(doc, x, y, s, color) {
       els.count.textContent = "Load failed";
     });
   }
-  loadRecords();
+  function initApp(){
+    if(window.ZOHO && window.ZOHO.CREATOR && window.ZOHO.CREATOR.init){
+      window.ZOHO.CREATOR.init().then(function(initData){
+        if(initData && (initData.loginUser || initData.loginUserId || initData.login_user)){
+          loggedInEmail = initData.loginUser || initData.loginUserId || initData.login_user;
+        } else {
+          // Check URL query parameters for login user
+          try {
+            var urlParams = new URLSearchParams(window.location.search);
+            loggedInEmail = urlParams.get("loginUser") || urlParams.get("loginuserid") || "";
+          } catch(e){}
+        }
+        loadRecords();
+      }).catch(function(err){
+        console.warn("ZOHO.CREATOR.init failed, proceeding with loadRecords:", err);
+        loadRecords();
+      });
+    } else {
+      loadRecords();
+    }
+  }
+
+  initApp();
 
 })();

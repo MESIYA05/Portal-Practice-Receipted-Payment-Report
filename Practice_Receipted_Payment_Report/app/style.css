@@ -299,6 +299,18 @@
     transition:border-color .15s ease, box-shadow .15s ease;
   }
 
+  .rp-combo.rp-disabled .rp-combo-btn{
+    background:#f2f5f8;
+    color:#738a9c;
+    border-color:#d7e0e8;
+    cursor:not-allowed;
+    pointer-events:none;
+  }
+  .rp-combo.rp-disabled .rp-combo-caret,
+  .rp-combo.rp-disabled .rp-clear-one{
+    display:none !important;
+  }
+
   .rp-combo.rp-open .rp-combo-btn{
     border-color:var(--brand);
     box-shadow:0 0 0 3px var(--brand-soft);
